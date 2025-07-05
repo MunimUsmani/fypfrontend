@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useRef } from "react"
-import { ArrowLeft, Camera, ImageIcon, Mic, FileAudio, Brain, Eye, Hand, CheckCircle } from "lucide-react"
+import { ArrowLeft, ImageIcon, Mic, FileAudio, Brain, Eye, Hand, CheckCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -246,24 +246,14 @@ export default function Screening() {
                         Upload an image to analyze facial expressions and emotional states using advanced AI
                       </p>
 
-                      <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Button
-                          variant="outline"
-                          onClick={() => imageFileRef.current?.click()}
-                          className="bg-white/80 border-blue-200 text-blue-700 hover:bg-blue-50 hover:border-blue-300 transition-all duration-300 h-12 px-6"
-                        >
-                          <ImageIcon className="w-5 h-5 mr-2" />
-                          Upload from Gallery
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => cameraRef.current?.click()}
-                          className="bg-white/80 border-blue-200 text-blue-700 hover:bg-blue-50 hover:border-blue-300 transition-all duration-300 h-12 px-6"
-                        >
-                          <Camera className="w-5 h-5 mr-2" />
-                          Take Photo
-                        </Button>
-                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => imageFileRef.current?.click()}
+                        className="bg-white/80 border-blue-200 text-blue-700 hover:bg-blue-50 hover:border-blue-300 transition-all duration-300 h-12 px-6"
+                      >
+                        <Eye className="w-5 h-5 mr-2" />
+                        Start Screening
+                      </Button>
 
                       <input
                         ref={imageFileRef}
@@ -380,24 +370,14 @@ export default function Screening() {
                         Upload an image of handwritten text to analyze writing patterns and psychological indicators
                       </p>
 
-                      <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Button
-                          variant="outline"
-                          onClick={() => imageFileRef.current?.click()}
-                          className="bg-white/80 border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-300 h-12 px-6"
-                        >
-                          <ImageIcon className="w-5 h-5 mr-2" />
-                          Upload from Gallery
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => cameraRef.current?.click()}
-                          className="bg-white/80 border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-300 h-12 px-6"
-                        >
-                          <Camera className="w-5 h-5 mr-2" />
-                          Take Photo
-                        </Button>
-                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => imageFileRef.current?.click()}
+                        className="bg-white/80 border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-300 h-12 px-6"
+                      >
+                        <ImageIcon className="w-5 h-5 mr-2" />
+                        Upload from Gallery
+                      </Button>
                     </div>
 
                     {previewUrl && (
