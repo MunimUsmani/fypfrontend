@@ -14,10 +14,11 @@ export default function Login() {
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [emailError, setEmailError] = useState("")
+  const [passwordError, setPasswordError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+
   const router = useRouter()
 
-  // Email validation
   const validateEmail = (email: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!email) {
@@ -25,6 +26,13 @@ export default function Login() {
     }
     if (!emailRegex.test(email)) {
       return "Please enter a valid email address"
+    }
+    return ""
+  }
+
+  const validatePassword = (password: string) => {
+    if (!password) {
+      return "Password is required"
     }
     return ""
   }
@@ -38,21 +46,23 @@ export default function Login() {
   const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
     setPassword(value)
+    setPasswordError(validatePassword(value))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     const emailErr = validateEmail(email)
-    setEmailError(emailErr)
+    const passwordErr = validatePassword(password)
 
-    if (!emailErr && email && password) {
+    setEmailError(emailErr)
+    setPasswordError(passwordErr)
+
+    if (!emailErr && !passwordErr) {
       setIsLoading(true)
       try {
-        // Simulate API call
         await new Promise((resolve) => setTimeout(resolve, 2000))
         console.log("Login attempt:", { email, password })
-        // Redirect to dashboard
         router.push("/dashboard")
       } catch (error) {
         console.error("Login failed:", error)
@@ -63,7 +73,6 @@ export default function Login() {
   }
 
   const handleForgotPassword = () => {
-    // Handle forgot password logic
     console.log("Forgot password clicked")
   }
 
@@ -71,7 +80,6 @@ export default function Login() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="bg-white rounded-2xl shadow-xl p-8">
-          {/* Header with Brain Icon */}
           <div className="text-center mb-8">
             <div
               className="mx-auto w-20 h-20 rounded-full flex items-center justify-center mb-4"
@@ -83,9 +91,7 @@ export default function Login() {
             <p className="text-gray-600">Sign in to access your dashboard</p>
           </div>
 
-          {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Email Field */}
             <div className="space-y-2">
               <Label htmlFor="email" className="text-sm font-medium text-gray-700">
                 Email Address
@@ -107,7 +113,6 @@ export default function Login() {
               {emailError && <p className="text-sm text-red-600 mt-1">{emailError}</p>}
             </div>
 
-            {/* Password Field */}
             <div className="space-y-2">
               <Label htmlFor="password" className="text-sm font-medium text-gray-700">
                 Password
@@ -120,7 +125,9 @@ export default function Login() {
                   value={password}
                   onChange={handlePasswordChange}
                   placeholder="Enter your password"
-                  className="pl-10 pr-10 h-12 border-2 transition-colors border-gray-200 focus:border-[#1E90FF]"
+                  className={`pl-10 pr-10 h-12 border-2 transition-colors ${
+                    passwordError ? "border-red-300 focus:border-red-500" : "border-gray-200 focus:border-[#1E90FF]"
+                  }`}
                   required
                 />
                 <button
@@ -131,12 +138,12 @@ export default function Login() {
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
+              {passwordError && <p className="text-sm text-red-600 mt-1">{passwordError}</p>}
             </div>
 
-            {/* Login Button */}
             <Button
               type="submit"
-              disabled={isLoading || !!emailError || !email || !password}
+              disabled={isLoading || !!emailError || !!passwordError || !email || !password}
               className="w-full h-12 text-white font-semibold rounded-lg transition-all duration-200 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ backgroundColor: "#1E90FF" }}
             >
@@ -150,7 +157,6 @@ export default function Login() {
               )}
             </Button>
 
-            {/* Forgot Password */}
             <div className="text-center">
               <button
                 type="button"
@@ -163,7 +169,6 @@ export default function Login() {
             </div>
           </form>
 
-          {/* Footer */}
           <div className="mt-8 pt-6 border-t border-gray-200 text-center">
             <p className="text-xs text-gray-500">Psychological Distress Inference System</p>
           </div>

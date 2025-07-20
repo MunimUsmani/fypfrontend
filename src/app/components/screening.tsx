@@ -1,514 +1,532 @@
-"use client"
+"use client";
 
-import type React from "react"
+import React, { useState, useRef, useEffect } from "react";
+import {
+  ArrowLeft, ImageIcon, Mic, Hand, Eye, Camera, VideoOff,
+} from "lucide-react";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { useRouter } from "next/navigation";
+import jsPDF from "jspdf";
 
-import { useState, useRef } from "react"
-import { ArrowLeft, ImageIcon, Mic, FileAudio, Brain, Eye, Hand, CheckCircle } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
-import { useRouter } from "next/navigation"
+const API_BASE_URL = "http://localhost:5000/api";
+
+interface AnalysisResult {
+  analysisType: string;
+  confidence: number;
+  severity: string;
+  details: string;
+}
 
 export default function Screening() {
-  const router = useRouter()
-  const [activeTab, setActiveTab] = useState("facial")
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const [analysisResult, setAnalysisResult] = useState<any>(null)
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState("facial");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
 
-  // File upload refs
-  const audioFileRef = useRef<HTMLInputElement>(null)
-  const imageFileRef = useRef<HTMLInputElement>(null)
-  const cameraRef = useRef<HTMLInputElement>(null)
+  const [completedSteps, setCompletedSteps] = useState<{ [key: string]: boolean }>({
+    facial: false,
+    handwriting: false,
+    voice: false,
+  });
 
-  // File states
-  const [selectedAudioFile, setSelectedAudioFile] = useState<File | null>(null)
-  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [results, setResults] = useState<{ [key: string]: AnalysisResult | null }>({
+    facial: null,
+    handwriting: null,
+    voice: null,
+  });
 
-  const handleAudioUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file && file.type === "audio/wav") {
-      setSelectedAudioFile(file)
-      console.log("Audio file selected:", file.name)
-    } else {
-      alert("Please select a valid .wav audio file")
+  const [summary, setSummary] = useState<{ avgConfidence: number; overallInference: string } | null>(null);
+
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const handwritingInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+
+  // Audio Recording
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioURL, setAudioURL] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const animationRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const canvasAudioRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/health`)
+      .then((res) => res.json())
+      .then(() => setApiHealthy(true))
+      .catch(() => setApiHealthy(false));
+  }, []);
+
+  const resetAll = () => {
+    setImageFile(null);
+    setAudioFile(null);
+    setAudioURL(null);
+    setImagePreview(null);
+    stopWebcam();
+    stopRecording();
+    clearCanvas();
+    setResults({ facial: null, handwriting: null, voice: null });
+    setCompletedSteps({ facial: false, handwriting: false, voice: false });
+    setSummary(null);
+    setActiveTab("facial");
+  };
+
+  /** Webcam **/
+  const startWebcam = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+      setWebcamStream(stream);
+    } catch {
+      alert("Unable to access webcam");
     }
-  }
+  };
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file && file.type.startsWith("image/")) {
-      setSelectedImageFile(file)
-      const url = URL.createObjectURL(file)
-      setPreviewUrl(url)
-      console.log("Image file selected:", file.name)
-    } else {
-      alert("Please select a valid image file")
+  const stopWebcam = () => {
+    webcamStream?.getTracks().forEach((track) => track.stop());
+    setWebcamStream(null);
+  };
+
+  const captureFrame = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx?.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const file = new File([blob], "webcam.jpg", { type: "image/jpeg" });
+        setImageFile(file);
+        setImagePreview(URL.createObjectURL(blob));
+      }
+    }, "image/jpeg");
+  };
+
+  const handleFileChange = (file: File) => {
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  /** Audio Recording **/
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      setAudioURL(null);
+
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      startWaveform(analyser);
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+        const file = new File([audioBlob], "recorded.wav", { type: "audio/wav" });
+        setAudioFile(file);
+        setCompletedSteps(prev => ({ ...prev, voice: true }));
+
+        const url = URL.createObjectURL(audioBlob);
+        setAudioURL(url);
+
+        cancelAnimationFrame(animationRef.current!);
+        clearCanvas();
+        stream.getTracks().forEach(track => track.stop());
+        audioContext.close();
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Microphone error:", error);
+      alert("Microphone access denied.");
     }
-  }
+  };
 
-  const handleCameraCapture = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file) {
-      setSelectedImageFile(file)
-      const url = URL.createObjectURL(file)
-      setPreviewUrl(url)
-      console.log("Camera image captured:", file.name)
-    }
-  }
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setIsRecording(false);
+  };
 
-  const handleAnalysis = async (analysisType: string) => {
-    setIsAnalyzing(true)
-    setAnalysisResult(null)
+  const startWaveform = (analyser: AnalyserNode) => {
+    const canvas = canvasAudioRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d")!;
+    const WIDTH = canvas.offsetWidth;
+    const HEIGHT = 120;
+    canvas.width = WIDTH;
+    canvas.height = HEIGHT;
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const draw = () => {
+      animationRef.current = requestAnimationFrame(draw);
+      analyser.getByteTimeDomainData(dataArray);
+
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#16a34a";
+      ctx.beginPath();
+
+      const sliceWidth = WIDTH / bufferLength;
+      let x = 0;
+
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i] / 128.0;
+        const y = (v * HEIGHT) / 2;
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        x += sliceWidth;
+      }
+
+      ctx.lineTo(WIDTH, HEIGHT / 2);
+      ctx.stroke();
+    };
+
+    draw();
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasAudioRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  };
+
+  /** Analyze **/
+  const analyze = async () => {
+    setIsAnalyzing(true);
+    const formData = new FormData();
+    let url = "";
+    let currentTab = activeTab;
 
     try {
-      const formData = new FormData()
-      let endpoint = ""
-
-      switch (analysisType) {
-        case "facial":
-          if (!selectedImageFile) {
-            alert("Please upload an image for facial analysis")
-            return
-          }
-          formData.append("image", selectedImageFile)
-          endpoint = "/api/facial-analysis"
-          break
-        case "voice":
-          if (!selectedAudioFile) {
-            alert("Please upload an audio file for voice analysis")
-            return
-          }
-          formData.append("audio", selectedAudioFile)
-          endpoint = "/api/voice-analysis"
-          break
-        case "handwritten":
-          if (!selectedImageFile) {
-            alert("Please upload an image for handwritten analysis")
-            return
-          }
-          formData.append("image", selectedImageFile)
-          endpoint = "/api/handwritten-analysis"
-          break
+      if (currentTab === "facial") {
+        if (!imageFile) return alert("Upload or capture a facial image.");
+        formData.append("image", imageFile);
+        url = `${API_BASE_URL}/face/static`;
+      } else if (currentTab === "handwriting") {
+        if (!imageFile) return alert("Upload a handwriting image.");
+        formData.append("image", imageFile);
+        url = `${API_BASE_URL}/handwriting`;
+      } else if (currentTab === "voice") {
+        if (!audioFile) return alert("Record or upload audio.");
+        formData.append("audio", audioFile);
+        url = `${API_BASE_URL}/voice`;
       }
 
-      // This would be your actual API call to Flask backend
-      const response = await fetch(endpoint, {
-        method: "POST",
-        body: formData,
-      })
+      const res = await fetch(url, { method: "POST", body: formData });
+      const data = await res.json();
 
-      if (response.ok) {
-        const result = await response.json()
-        setAnalysisResult(result)
-      } else {
-        throw new Error("Analysis failed")
+      const fallbackEmotion = data.emotion || data.details?.emotion || "Unknown";
+      const fallbackConfidence = data.confidence || data.details?.confidence || 0.0;
+
+      const result: AnalysisResult = {
+        analysisType: currentTab,
+        confidence: parseFloat(fallbackConfidence),
+        severity:
+          data.psychological_inference && data.psychological_inference !== "Unknown"
+            ? data.psychological_inference
+            : fallbackEmotion !== "Unknown"
+            ? `Possible ${fallbackEmotion}`
+            : "Unknown",
+        details: "" // Removed JSON details
+      };
+
+      setResults(prev => ({ ...prev, [currentTab]: result }));
+      setCompletedSteps(prev => ({ ...prev, [currentTab]: true }));
+
+      if (currentTab === "facial") setActiveTab("handwriting");
+      else if (currentTab === "handwriting") setActiveTab("voice");
+      else if (currentTab === "voice") {
+        const allResults = Object.values(results).filter(r => r !== null) as AnalysisResult[];
+        const newResults = [...allResults, result];
+
+        if (newResults.length === 3) {
+          const avgConfidence = newResults.reduce((acc, r) => acc + r.confidence, 0) / 3;
+
+          // ✅ SINGLE DECISION LOGIC
+          const allSeverities = newResults.map(r => r.severity.toLowerCase());
+          let finalInference = "No Distress Detected";
+          if (allSeverities.some(s => s.includes("stress"))) {
+            finalInference = "Stress";
+          } else if (allSeverities.some(s => s.includes("anxiety"))) {
+            finalInference = "Anxiety";
+          } else if (allSeverities.some(s => s.includes("depression"))) {
+            finalInference = "Depression";
+          }
+
+          setSummary({ avgConfidence, overallInference: finalInference });
+          setActiveTab("summary");
+        }
       }
-    } catch (error) {
-      console.error("Analysis error:", error)
-      // Mock result for demonstration
-      setAnalysisResult({
-        analysisType,
-        confidence: Math.random() * 100,
-        severity: ["low", "moderate", "high", "severe"][Math.floor(Math.random() * 4)],
-        details: `Mock ${analysisType} analysis result`,
-      })
+
+    } catch (e) {
+      console.error("Analysis failed:", e);
+      alert("Analysis failed. See console.");
     } finally {
-      setIsAnalyzing(false)
+      setIsAnalyzing(false);
     }
-  }
-
-  const resetFiles = () => {
-    setSelectedAudioFile(null)
-    setSelectedImageFile(null)
-    setPreviewUrl(null)
-    setAnalysisResult(null)
-    if (audioFileRef.current) audioFileRef.current.value = ""
-    if (imageFileRef.current) imageFileRef.current.value = ""
-    if (cameraRef.current) cameraRef.current.value = ""
-  }
+  };
 
   const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case "low":
-        return "text-green-600 bg-green-100 border-green-200"
-      case "moderate":
-        return "text-yellow-600 bg-yellow-100 border-yellow-200"
-      case "high":
-        return "text-orange-600 bg-orange-100 border-orange-200"
-      case "severe":
-        return "text-red-600 bg-red-100 border-red-200"
-      default:
-        return "text-gray-600 bg-gray-100 border-gray-200"
-    }
-  }
+    const s = severity.toLowerCase();
+    if (s.includes("no distress") || s.includes("normal") || s.includes("low"))
+      return "text-green-600 bg-green-100 border-green-200";
+    if (s.includes("depression")) return "text-yellow-600 bg-yellow-100 border-yellow-200";
+    if (s.includes("anxiety")) return "text-orange-600 bg-orange-100 border-orange-200";
+    if (s.includes("stress") || s.includes("distress"))
+      return "text-red-600 bg-red-100 border-red-200";
+    return "text-gray-600 bg-gray-100 border-gray-200";
+  };
 
-  const tabConfigs = [
-    {
-      value: "facial",
-      label: "Facial Analysis",
-      icon: Eye,
-      color: "#1E90FF",
-      bgColor: "bg-blue-50",
-    },
-    {
-      value: "voice",
-      label: "Voice Analysis",
-      icon: Mic,
-      color: "#10B981",
-      bgColor: "bg-green-50",
-    },
-    {
-      value: "handwritten",
-      label: "Handwritten Analysis",
-      icon: Hand,
-      color: "#8B5CF6",
-      bgColor: "bg-purple-50",
-    },
-  ]
+  /** ✅ Professional PDF Export **/
+  const generatePDF = () => {
+    if (!summary) return;
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // HEADER
+    doc.setFontSize(18);
+    doc.setTextColor(22, 160, 133);
+    doc.text("AI Psychological Screening Report", pageWidth / 2, 20, { align: "center" });
+
+    doc.setFontSize(12);
+    doc.setTextColor(100);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 30);
+
+    // SUMMARY
+    doc.setFontSize(14);
+    doc.setTextColor(0);
+    doc.text("Summary", 14, 45);
+    doc.setFontSize(12);
+    doc.text(`Average Confidence: ${summary.avgConfidence.toFixed(2)}%`, 14, 55);
+    doc.text(`Overall Inference: ${summary.overallInference}`, 14, 65);
+
+    // TABLE HEADER
+    doc.setFontSize(14);
+    doc.text("Detailed Analysis", 14, 80);
+
+    const startY = 90;
+    doc.setFillColor(230, 230, 230);
+    doc.rect(14, startY, pageWidth - 28, 10, "F");
+    doc.setTextColor(0);
+    doc.text("Type", 16, startY + 7);
+    doc.text("Confidence", 70, startY + 7);
+    doc.text("Inference", 120, startY + 7);
+
+    let currentY = startY + 15;
+    ["facial", "handwriting", "voice"].forEach((type) => {
+      const result = results[type];
+      if (result) {
+        let color = [0, 0, 0];
+        if (result.severity.toLowerCase().includes("normal")) color = [34, 139, 34];
+        else if (result.severity.toLowerCase().includes("depression")) color = [255, 165, 0];
+        else if (result.severity.toLowerCase().includes("anxiety")) color = [255, 140, 0];
+        else if (result.severity.toLowerCase().includes("stress")) color = [220, 20, 60];
+
+        doc.setTextColor(0);
+        doc.text(type.toUpperCase(), 16, currentY);
+        doc.text(`${result.confidence.toFixed(2)}%`, 70, currentY);
+        doc.setTextColor(...color);
+        doc.text(result.severity, 120, currentY);
+
+        currentY += 10;
+      }
+    });
+
+    doc.setTextColor(100);
+    doc.setFontSize(10);
+    doc.text("Generated by AI Psychological Screening System", pageWidth / 2, 280, { align: "center" });
+
+    doc.save("Psychological_Screening_Report.pdf");
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Enhanced Header */}
-      <div className="bg-gradient-to-r from-green-500 to-emerald-600 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between py-6">
-            <div className="flex items-center">
-              <Button
-                variant="ghost"
-                onClick={() => router.push("/dashboard")}
-                className="mr-4 p-2 text-white hover:bg-white/20 transition-colors"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
-              <div className="flex items-center">
-                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mr-4">
-                  <Brain className="w-7 h-7 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold text-white">AI Screening Analysis</h1>
-                  <p className="text-green-100">Analyze patient data using machine learning models</p>
-                </div>
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              onClick={resetFiles}
-              className="bg-white/10 border-white/30 text-white hover:bg-white/20 transition-colors"
-            >
-              Reset All
+      <div className="bg-green-600 shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center">
+          <div className="flex items-center">
+            <Button variant="ghost" onClick={() => router.push("/dashboard")} className="mr-4 text-white">
+              <ArrowLeft className="w-5 h-5" />
             </Button>
+            <h1 className="text-2xl text-white font-bold">AI Psychological Screening</h1>
           </div>
+          <Button variant="outline" onClick={resetAll} className="text-white border-white">
+            Reset All
+          </Button>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-7xl mx-auto py-8 px-4">
+        {apiHealthy === false && (
+          <div className="bg-red-100 text-red-600 p-4 rounded mb-4">
+            API is not reachable. Please start your backend server.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Enhanced Analysis Tabs */}
           <div className="lg:col-span-2">
-            <Card className="bg-gradient-to-br from-white to-gray-50 border-0 shadow-xl">
-              <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50 border-b border-green-100">
-                <CardTitle className="text-xl font-bold flex items-center text-gray-900">
-                  <Brain className="w-6 h-6 mr-3 text-green-600" />
-                  Select Analysis Type
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6">
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                  <TabsList className="grid w-full grid-cols-3 bg-gray-100 p-1 rounded-xl">
-                    {tabConfigs.map((tab) => {
-                      const IconComponent = tab.icon
-                      return (
-                        <TabsTrigger
-                          key={tab.value}
-                          value={tab.value}
-                          className="flex items-center px-4 py-3 rounded-lg transition-all duration-300 data-[state=active]:bg-white data-[state=active]:shadow-md"
-                          style={{
-                            color: activeTab === tab.value ? tab.color : "#6B7280",
-                          }}
-                        >
-                          <IconComponent className="w-4 h-4 mr-2" />
-                          <span className="font-medium">{tab.label}</span>
-                        </TabsTrigger>
-                      )
-                    })}
+            <Card>
+              <CardHeader><CardTitle>Screening Input</CardTitle></CardHeader>
+              <CardContent>
+                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                  <TabsList className="grid grid-cols-4">
+                    <TabsTrigger value="facial"><Eye className="w-4 h-4 mr-1" /> Facial</TabsTrigger>
+                    <TabsTrigger value="handwriting" disabled={!completedSteps.facial}><Hand className="w-4 h-4 mr-1" /> Handwriting</TabsTrigger>
+                    <TabsTrigger value="voice" disabled={!completedSteps.handwriting}><Mic className="w-4 h-4 mr-1" /> Voice</TabsTrigger>
+                    <TabsTrigger value="summary" disabled={!completedSteps.voice}>Summary</TabsTrigger>
                   </TabsList>
 
-                  {/* Facial Analysis Tab */}
-                  <TabsContent value="facial" className="space-y-6 mt-8">
-                    <div className="text-center p-8 border-2 border-dashed border-blue-200 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 hover:border-blue-300 transition-colors group">
-                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <Eye className="w-8 h-8 text-blue-600" />
-                      </div>
-                      <h3 className="text-xl font-bold mb-2 text-gray-900">Facial Expression Analysis</h3>
-                      <p className="text-gray-600 mb-6 max-w-md mx-auto">
-                        Upload an image to analyze facial expressions and emotional states using advanced AI
-                      </p>
-
-                      <Button
-                        variant="outline"
-                        onClick={() => imageFileRef.current?.click()}
-                        className="bg-white/80 border-blue-200 text-blue-700 hover:bg-blue-50 hover:border-blue-300 transition-all duration-300 h-12 px-6"
-                      >
-                        <Eye className="w-5 h-5 mr-2" />
-                        Start Screening
-                      </Button>
-
-                      <input
-                        ref={imageFileRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                      />
-                      <input
-                        ref={cameraRef}
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        onChange={handleCameraCapture}
-                        className="hidden"
-                      />
+                  {/* Facial */}
+                  <TabsContent value="facial" className="mt-4">
+                    {imagePreview && <img src={imagePreview} className="rounded mb-2 max-h-64 mx-auto" alt="preview" />}
+                    <div className="flex gap-2 flex-wrap">
+                      <Button onClick={() => imageInputRef.current?.click()}><ImageIcon className="w-4 h-4 mr-1" /> Upload</Button>
+                      <Button onClick={startWebcam}><Camera className="w-4 h-4 mr-1" /> Start Cam</Button>
+                      <Button onClick={captureFrame}><VideoOff className="w-4 h-4 mr-1" /> Capture</Button>
+                      <Button onClick={stopWebcam}>Stop Cam</Button>
                     </div>
+                    <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={e => e.target.files?.[0] && handleFileChange(e.target.files[0])} />
+                    <video ref={videoRef} className="mt-2 mx-auto rounded" autoPlay muted />
+                    <canvas ref={canvasRef} hidden />
+                  </TabsContent>
 
-                    {previewUrl && (
-                      <div className="text-center bg-gradient-to-br from-blue-50 to-indigo-50 p-6 rounded-xl">
-                        <img
-                          src={previewUrl || "/placeholder.svg"}
-                          alt="Preview"
-                          className="max-w-full h-64 object-contain mx-auto rounded-lg shadow-lg"
-                        />
-                        <Button
-                          onClick={() => handleAnalysis("facial")}
-                          disabled={isAnalyzing}
-                          className="mt-6 h-12 px-8 bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-300"
-                        >
-                          {isAnalyzing ? (
-                            <div className="flex items-center">
-                              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                              Analyzing...
-                            </div>
-                          ) : (
-                            <div className="flex items-center">
-                              <Eye className="w-5 h-5 mr-2" />
-                              Start Facial Analysis
-                            </div>
-                          )}
-                        </Button>
+                  {/* Handwriting */}
+                  <TabsContent value="handwriting" className="mt-4">
+                    <Button onClick={() => handwritingInputRef.current?.click()}><Hand className="w-4 h-4 mr-1" /> Upload Handwriting</Button>
+                    <input ref={handwritingInputRef} type="file" accept="image/*" hidden onChange={e => e.target.files?.[0] && handleFileChange(e.target.files[0])} />
+                    {imagePreview && <img src={imagePreview} className="rounded mt-4 mx-auto max-h-64" />}
+                  </TabsContent>
+
+                  {/* Voice */}
+                  <TabsContent value="voice" className="mt-4">
+                    <div className="flex gap-3 mb-3">
+                      {!isRecording ? (
+                        <Button onClick={startRecording}><Mic className="w-4 h-4 mr-1" /> Start Recording</Button>
+                      ) : (
+                        <Button onClick={stopRecording} variant="destructive">Stop & Save</Button>
+                      )}
+                    </div>
+                    {isRecording && (
+                      <canvas
+                        ref={canvasAudioRef}
+                        style={{
+                          width: "100%",
+                          height: "120px",
+                          background: "#fff",
+                          border: "1px solid #ddd",
+                          borderRadius: "8px",
+                        }}
+                      />
+                    )}
+                    {audioURL && !isRecording && (
+                      <div className="mt-4">
+                        <audio controls src={audioURL} className="w-full" />
                       </div>
                     )}
                   </TabsContent>
 
-                  {/* Voice Analysis Tab */}
-                  <TabsContent value="voice" className="space-y-6 mt-8">
-                    <div className="text-center p-8 border-2 border-dashed border-green-200 rounded-xl bg-gradient-to-br from-green-50 to-emerald-50 hover:border-green-300 transition-colors group">
-                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <Mic className="w-8 h-8 text-green-600" />
-                      </div>
-                      <h3 className="text-xl font-bold mb-2 text-gray-900">Voice Pattern Analysis</h3>
-                      <p className="text-gray-600 mb-6 max-w-md mx-auto">
-                        Upload a .wav audio file to analyze speech patterns and vocal biomarkers
-                      </p>
+                  {/* Summary */}
+                  <TabsContent value="summary" className="mt-4">
+                    {summary ? (
+                      <div className="p-4 border rounded bg-white">
+                        <h3 className="text-lg font-bold mb-2">Overall Screening Result</h3>
+                        <p><strong>Average Confidence:</strong> {summary.avgConfidence.toFixed(2)}%</p>
+                        <p><strong>Overall Inference:</strong> {summary.overallInference}</p>
 
-                      <Button
-                        variant="outline"
-                        onClick={() => audioFileRef.current?.click()}
-                        className="bg-white/80 border-green-200 text-green-700 hover:bg-green-50 hover:border-green-300 transition-all duration-300 h-12 px-6"
-                      >
-                        <FileAudio className="w-5 h-5 mr-2" />
-                        Upload Audio File (.wav)
-                      </Button>
-
-                      <input
-                        ref={audioFileRef}
-                        type="file"
-                        accept=".wav,audio/wav"
-                        onChange={handleAudioUpload}
-                        className="hidden"
-                      />
-                    </div>
-
-                    {selectedAudioFile && (
-                      <div className="text-center p-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl">
-                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                          <FileAudio className="w-8 h-8 text-green-600" />
-                        </div>
-                        <p className="font-semibold text-gray-900 mb-1">{selectedAudioFile.name}</p>
-                        <p className="text-sm text-gray-600 mb-6">
-                          Size: {(selectedAudioFile.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
-                        <Button
-                          onClick={() => handleAnalysis("voice")}
-                          disabled={isAnalyzing}
-                          className="h-12 px-8 bg-green-600 hover:bg-green-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-300"
-                        >
-                          {isAnalyzing ? (
-                            <div className="flex items-center">
-                              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                              Analyzing...
+                        <hr className="my-4" />
+                        <h4 className="font-semibold">Detailed Results:</h4>
+                        {["facial", "handwriting", "voice"].map((type) => {
+                          const result = results[type];
+                          return (
+                            <div key={type} className="mt-2">
+                              <p><strong>{type.toUpperCase()}:</strong> {result?.severity} ({result?.confidence.toFixed(2)}%)</p>
                             </div>
-                          ) : (
-                            <div className="flex items-center">
-                              <Mic className="w-5 h-5 mr-2" />
-                              Start Voice Analysis
-                            </div>
-                          )}
+                          );
+                        })}
+
+                        <Button className="mt-4 bg-blue-600 text-white" onClick={generatePDF}>
+                          Download PDF Report
                         </Button>
                       </div>
-                    )}
-                  </TabsContent>
-
-                  {/* Handwritten Analysis Tab */}
-                  <TabsContent value="handwritten" className="space-y-6 mt-8">
-                    <div className="text-center p-8 border-2 border-dashed border-purple-200 rounded-xl bg-gradient-to-br from-purple-50 to-violet-50 hover:border-purple-300 transition-colors group">
-                      <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <Hand className="w-8 h-8 text-purple-600" />
-                      </div>
-                      <h3 className="text-xl font-bold mb-2 text-gray-900">Handwriting Analysis</h3>
-                      <p className="text-gray-600 mb-6 max-w-md mx-auto">
-                        Upload an image of handwritten text to analyze writing patterns and psychological indicators
-                      </p>
-
-                      <Button
-                        variant="outline"
-                        onClick={() => imageFileRef.current?.click()}
-                        className="bg-white/80 border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-300 h-12 px-6"
-                      >
-                        <ImageIcon className="w-5 h-5 mr-2" />
-                        Upload from Gallery
-                      </Button>
-                    </div>
-
-                    {previewUrl && (
-                      <div className="text-center bg-gradient-to-br from-purple-50 to-violet-50 p-6 rounded-xl">
-                        <img
-                          src={previewUrl || "/placeholder.svg"}
-                          alt="Preview"
-                          className="max-w-full h-64 object-contain mx-auto rounded-lg shadow-lg"
-                        />
-                        <Button
-                          onClick={() => handleAnalysis("handwritten")}
-                          disabled={isAnalyzing}
-                          className="mt-6 h-12 px-8 bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-300"
-                        >
-                          {isAnalyzing ? (
-                            <div className="flex items-center">
-                              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                              Analyzing...
-                            </div>
-                          ) : (
-                            <div className="flex items-center">
-                              <Hand className="w-5 h-5 mr-2" />
-                              Start Handwriting Analysis
-                            </div>
-                          )}
-                        </Button>
-                      </div>
+                    ) : (
+                      <p className="text-gray-500">Complete all steps to see summary.</p>
                     )}
                   </TabsContent>
                 </Tabs>
+
+                <Button className="mt-4 w-full bg-green-600 text-white" onClick={analyze} disabled={isAnalyzing}>
+                  {isAnalyzing ? "Analyzing..." : "Start Analysis"}
+                </Button>
               </CardContent>
             </Card>
           </div>
 
-          {/* Enhanced Results Sidebar */}
-          <div className="space-y-6">
-            {/* Analysis Results */}
-            <Card className="bg-gradient-to-br from-white to-gray-50 border-0 shadow-xl">
-              <CardHeader className="bg-gradient-to-r from-gray-50 to-slate-50 border-b border-gray-100">
-                <CardTitle className="text-lg font-bold flex items-center text-gray-900">
-                  <Brain className="w-5 h-5 mr-2 text-gray-600" />
-                  Analysis Results
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6">
-                {isAnalyzing ? (
-                  <div className="text-center py-8">
-                    <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                    <p className="text-gray-600 font-medium">Analyzing data...</p>
-                    <p className="text-sm text-gray-500 mt-1">This may take a few moments</p>
-                  </div>
-                ) : analysisResult ? (
-                  <div className="space-y-4">
-                    <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100">
-                      <h4 className="font-semibold mb-2 text-gray-900">Analysis Type</h4>
-                      <Badge className="bg-blue-100 text-blue-800 border-blue-200 capitalize">
-                        {analysisResult.analysisType}
-                      </Badge>
-                    </div>
-                    <div className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border border-green-100">
-                      <h4 className="font-semibold mb-2 text-gray-900">Confidence Score</h4>
-                      <div className="flex items-center">
-                        <div className="text-2xl font-bold text-green-600">
-                          {analysisResult.confidence?.toFixed(1)}%
+          <div>
+            <Card>
+              <CardHeader><CardTitle>Analysis Results</CardTitle></CardHeader>
+              <CardContent>
+                {["facial", "handwriting", "voice"].map((type) => {
+                  const result = results[type];
+                  return (
+                    <div key={type} className="mb-4">
+                      <h3 className="font-semibold capitalize">{type} Result</h3>
+                      {result ? (
+                        <div className="pl-2 border-l-4 border-emerald-400 mt-1">
+                          <p><strong>Confidence:</strong> {result.confidence.toFixed(1)}%</p>
+                          <p><strong>Inference:</strong>
+                            <Badge className={`${getSeverityColor(result.severity)} border`}>
+                              {result.severity}
+                            </Badge>
+                          </p>
                         </div>
-                        <CheckCircle className="w-5 h-5 text-green-500 ml-2" />
-                      </div>
+                      ) : (
+                        <p className="text-sm text-gray-500 italic">Not analyzed yet.</p>
+                      )}
                     </div>
-                    <div className="p-4 bg-gradient-to-r from-orange-50 to-yellow-50 rounded-lg border border-orange-100">
-                      <h4 className="font-semibold mb-2 text-gray-900">Severity Level</h4>
-                      <Badge className={`${getSeverityColor(analysisResult.severity)} border font-medium`}>
-                        {analysisResult.severity?.charAt(0).toUpperCase() + analysisResult.severity?.slice(1)}
-                      </Badge>
-                    </div>
-                    <div className="p-4 bg-gradient-to-r from-gray-50 to-slate-50 rounded-lg border border-gray-100">
-                      <h4 className="font-semibold mb-2 text-gray-900">Details</h4>
-                      <p className="text-sm text-gray-600 leading-relaxed">{analysisResult.details}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <Brain className="w-8 h-8 opacity-50" />
-                    </div>
-                    <p className="font-medium">No analysis results yet</p>
-                    <p className="text-sm mt-1">Upload data and run analysis</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Enhanced Quick Info */}
-            <Card className="bg-gradient-to-br from-white to-gray-50 border-0 shadow-xl">
-              <CardHeader className="bg-gradient-to-r from-gray-50 to-slate-50 border-b border-gray-100">
-                <CardTitle className="text-lg font-bold text-gray-900">Analysis Capabilities</CardTitle>
-              </CardHeader>
-              <CardContent className="p-6">
-                <div className="space-y-4">
-                  {[
-                    { name: "Facial Analysis", icon: Eye, color: "#1E90FF" },
-                    { name: "Voice Analysis", icon: Mic, color: "#10B981" },
-                    { name: "Handwriting Analysis", icon: Hand, color: "#8B5CF6" },
-                  ].map((item) => {
-                    const IconComponent = item.icon
-                    return (
-                      <div
-                        key={item.name}
-                        className="flex items-center justify-between p-3 bg-gradient-to-r from-gray-50 to-slate-50 rounded-lg border border-gray-100 hover:shadow-md transition-shadow"
-                      >
-                        <div className="flex items-center">
-                          <div
-                            className="w-8 h-8 rounded-lg flex items-center justify-center mr-3"
-                            style={{ backgroundColor: `${item.color}20` }}
-                          >
-                            <IconComponent className="w-4 h-4" style={{ color: item.color }} />
-                          </div>
-                          <span className="text-sm font-medium text-gray-700">{item.name}</span>
-                        </div>
-                        <div className="flex items-center">
-                          <CheckCircle className="w-4 h-4 text-green-500 mr-1" />
-                          <span className="text-xs text-green-600 font-medium">Available</span>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                  );
+                })}
               </CardContent>
             </Card>
           </div>
         </div>
       </div>
     </div>
-  )
+  );
 }

@@ -120,3 +120,11 @@
     @apply bg-background text-foreground;
   }
 }
+
+:root {
+  --font-baloo-bhai: 'Baloo Bhai 2', cursive;
+}
+
+body {
+  font-family: var(--font-baloo-bhai);
+}
